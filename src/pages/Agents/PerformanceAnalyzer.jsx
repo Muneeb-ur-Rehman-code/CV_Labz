@@ -1,14 +1,14 @@
+
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm'; 
+import remarkGfm from 'remark-gfm';
 
 const PerformanceAnalyzer = () => {
   const [performanceData, setPerformanceData] = useState(null);
+  const [noPerformanceData, setNoPerformanceData] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [webhookMessage, setWebhookMessage] = useState({ show: false, type: '', text: '' });
-  const [showSkeleton, setShowSkeleton] = useState(false);
-  const [isPolling, setIsPolling] = useState(false);
 
   const API_BASE = "https://delightful-passion-production.up.railway.app/performance";
 
@@ -19,73 +19,11 @@ const PerformanceAnalyzer = () => {
     }, 3000);
   };
 
-  const pollForPerformanceData = async () => {
-    let attempts = 0;
-    const maxAttempts = 15;
-    let isPollingActive = true;
-
-    const checkPerformanceData = async () => {
-      if (!isPollingActive) return;
-
-      try {
-        const response = await fetch(`${API_BASE}/performance-data`, {
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const contentType = response.headers.get('content-type');
-        if (!contentType?.includes('application/json')) {
-          throw new Error('API returned non-JSON response');
-        }
-
-        const data = await response.json();
-        console.log('Performance data response:', data);
-
-        if (data.data && data.data.text) {
-          setPerformanceData(data.data.text);
-          setShowSkeleton(false);
-          setIsPolling(false);
-          isPollingActive = false;
-          showWebhookMessage('success', 'Performance analysis retrieved successfully!');
-          return true;
-        } else if (data.data && data.data.message === 'No valid data provided') {
-          attempts++;
-          console.log(`Attempt ${attempts}: Waiting for performance data...`);
-          if (attempts < maxAttempts && isPollingActive) {
-            setTimeout(checkPerformanceData, 20000);
-          } else if (isPollingActive) {
-            setShowSkeleton(false);
-            setIsPolling(false);
-            isPollingActive = false;
-            showWebhookMessage('error', 'Timeout: No data received after 5 minutes.');
-          }
-        } else {
-          throw new Error('Unexpected response format');
-        }
-      } catch (error) {
-        console.error('Error polling for performance data:', error);
-        attempts++;
-        if (attempts < maxAttempts && isPollingActive) {
-          setTimeout(checkPerformanceData, 20000);
-        } else if (isPollingActive) {
-          setShowSkeleton(false);
-          setIsPolling(false);
-          isPollingActive = false;
-          showWebhookMessage('error', 'Failed to retrieve performance data.');
-        }
-      }
-    };
-
-    checkPerformanceData();
-  };
-
   const generatePerformanceAnalysis = async () => {
     setIsLoading(true);
-    setShowSkeleton(true);
     setPerformanceData(null);
+    setNoPerformanceData(false);
+    showWebhookMessage('info', 'Generating performance analysis...');
 
     try {
       const response = await fetch(`${API_BASE}/performance-req`, {
@@ -93,58 +31,67 @@ const PerformanceAnalyzer = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
       });
 
-      if (response.ok) {
-        showWebhookMessage('success', 'Performance analysis request sent successfully! Generating insights...');
-        setIsLoading(false);
-        setIsPolling(true);
-        pollForPerformanceData();
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const { message: responseMessage, data } = await response.json();
+      console.debug("Backend response:", data);
+
+      if (data === null || typeof data !== "string" || data.trim() === "") {
+        setNoPerformanceData(true);
+        showWebhookMessage('info', responseMessage || 'No performance data available for your account.');
       } else {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        setPerformanceData(data);
+        showWebhookMessage('success', responseMessage || 'Performance analysis retrieved successfully!');
       }
     } catch (error) {
       console.error('Error generating performance analysis:', error);
-      setShowSkeleton(false);
+      showWebhookMessage('error', error.message === 'Login or Register first' 
+        ? 'Please login or register first.' 
+        : 'Failed to retrieve performance analysis.');
+    } finally {
       setIsLoading(false);
-      showWebhookMessage('error', 'Failed to generate performance analysis. Please try again.');
     }
   };
 
-  // Function to render Markdown-like text with proper formatting
-const renderPerformanceData = (text) => {
-  if (!text) return null;
+  const renderPerformanceData = (text) => {
+    if (!text) return null;
 
-  return (
-    <div className="prose prose-blue max-w-none">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          h3: ({ ...props}) => (
-            <h3 className="text-xl font-semibold text-gray-800 mb-4" {...props} />
-          ),
-          p: ({...props}) => (
-            <p className="text-gray-600 mb-3 leading-relaxed" {...props} />
-          ),
-          li: ({ ...props}) => (
-            <li className="mb-2 text-gray-600" {...props} />
-          ),
-          ul: ({...props}) => (
-            <ul className="list-disc pl-6 mb-4" {...props} />
-          ),
-          ol: ({ ...props}) => (
-            <ol className="list-decimal pl-6 mb-4" {...props} />
-          ),
-          strong: ({ ...props}) => (
-            <strong className="font-semibold text-gray-800" {...props} />
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
-};
+    return (
+      <div className="prose prose-blue max-w-none">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            h3: ({ ...props }) => (
+              <h3 className="text-xl font-semibold text-gray-800 mb-4" {...props} />
+            ),
+            p: ({ ...props }) => (
+              <p className="text-gray-600 mb-3 leading-relaxed" {...props} />
+            ),
+            li: ({ ...props }) => (
+              <li className="mb-2 text-gray-600" {...props} />
+            ),
+            ul: ({ ...props }) => (
+              <ul className="list-disc pl-6 mb-4" {...props} />
+            ),
+            ol: ({ ...props }) => (
+              <ol className="list-decimal pl-6 mb-4" {...props} />
+            ),
+            strong: ({ ...props }) => (
+              <strong className="font-semibold text-gray-800" {...props} />
+            ),
+          }}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
@@ -159,7 +106,9 @@ const renderPerformanceData = (text) => {
               className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
                 webhookMessage.type === 'success'
                   ? 'bg-green-100 text-green-800 border border-green-200'
-                  : 'bg-red-100 text-red-800 border border-red-200'
+                  : webhookMessage.type === 'error'
+                  ? 'bg-red-100 text-red-800 border border-red-200'
+                  : 'bg-blue-100 text-blue-800 border border-blue-200'
               }`}
             >
               {webhookMessage.text}
@@ -219,7 +168,7 @@ const renderPerformanceData = (text) => {
               transition: { repeat: Infinity, duration: 2, ease: 'easeInOut' }
             }}
             onClick={generatePerformanceAnalysis}
-            disabled={isLoading || isPolling}
+            disabled={isLoading}
             className="inline-flex items-center justify-center gap-2 font-medium transition-colors bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white text-base px-8 py-4 rounded-xl shadow-lg"
           >
             {isLoading ? (
@@ -230,17 +179,15 @@ const renderPerformanceData = (text) => {
                 </svg>
                 Analyzing Performance...
               </span>
-            ) : isPolling ? (
-              'Generating Insights...'
             ) : (
               'Generate Performance Report'
             )}
           </motion.button>
         </motion.div>
 
-         {/* Performance Data Display */}
+        {/* Performance Data Display */}
         <AnimatePresence>
-          {performanceData && !showSkeleton && (
+          {performanceData && (
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -254,43 +201,27 @@ const renderPerformanceData = (text) => {
               </div>
             </motion.div>
           )}
+          {noPerformanceData && !isLoading && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.5 }}
+              className="glass-card rounded-3xl overflow-hidden shadow-soft-lg p-8 mb-8 text-center"
+            >
+              <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <h3 className="mt-4 text-lg font-medium text-gray-900">No Performance Data Available</h3>
+              <p className="mt-2 text-gray-500">
+                Try generating a report again to receive performance analysis!
+              </p>
+            </motion.div>
+          )}
         </AnimatePresence>
-
-        {/* Skeleton stays same */}
-         {/* Loading Skeleton */}
-        {showSkeleton && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.5 }}
-            className="glass-card rounded-3xl overflow-hidden shadow-soft-lg p-8 mb-8"
-          >
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">Analyzing Your Performance</h2>
-            <p className="text-gray-600 mb-6 text-center">Evaluating metrics and generating comprehensive optimization strategies...</p>
-
-            <div className="w-full px-4 py-3 border border-gray-300 rounded-xl bg-gray-50 min-h-[400px]">
-              <div className="animate-pulse space-y-4">
-                <div className="h-6 bg-gray-200 rounded w-3/4"></div>
-                <div className="h-4 bg-gray-200 rounded w-full"></div>
-                <div className="h-4 bg-gray-200 rounded w-5/6"></div>
-                <div className="h-4 bg-gray-200 rounded w-4/5"></div>
-                <div className="h-6 bg-gray-200 rounded w-2/3"></div>
-                <div className="h-4 bg-gray-200 rounded w-full"></div>
-                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                <div className="h-4 bg-gray-200 rounded w-5/6"></div>
-                <div className="h-6 bg-gray-200 rounded w-1/2"></div>
-                <div className="h-4 bg-gray-200 rounded w-full"></div>
-                <div className="h-4 bg-gray-200 rounded w-4/5"></div>
-                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-              </div>
-            </div>
-          </motion.div>
-        )}
       </div>
     </div>
   );
-       
-     
 };
 
 export default PerformanceAnalyzer;

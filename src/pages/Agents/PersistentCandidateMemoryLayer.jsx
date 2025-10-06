@@ -12,7 +12,6 @@ const Agent4 = () => {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [pdfUploaded, setPdfUploaded] = useState(false);
-  const [isPolling, setIsPolling] = useState(false);
   const [inputEnabled, setInputEnabled] = useState(false);
 
   const API_BASE = "https://delightful-passion-production.up.railway.app";
@@ -85,16 +84,8 @@ const Agent4 = () => {
       if (response.ok) {
         showWebhookMessage('success', 'PDF uploaded successfully to server!');
         setPdfUploaded(true);
-        setUploadMessage('PDF successfully uploaded to server! Processing...');
-
-        setTimeout(() => {
-          setUploadMessage('PDF processing completed! Enabling input field in 5 seconds...');
-          setTimeout(() => {
-            setUploadMessage('Input field is now enabled!');
-            setInputEnabled(true);
-            showWebhookMessage('success', 'Input field is now enabled!');
-          }, 5000);
-        }, 10000);
+        setInputEnabled(true);
+        setUploadMessage('PDF uploaded successfully! You can now enter a query.');
       } else {
         console.error('❌ PDF Upload Error Response:', uploadResponse);
         if (uploadResponse.error === "Login or register first") {
@@ -131,96 +122,45 @@ const Agent4 = () => {
         body: JSON.stringify({ message: inputValue })
       });
 
-      const inputResponse = await response.json();
+      const data = await response.json();
+
       if (response.ok) {
-        console.log('📤 Input Message Response:', inputResponse);
-        showWebhookMessage('success', 'Message sent successfully! Polling for output...');
-        pollForOutputData();
+        console.log('📤 Input Message Response:', data);
+
+        // Extract output with safety checks
+        let output = data.output;
+        if (Array.isArray(output)) {
+          output = output[0]?.data || output[0] || [];
+        } else if (output?.data) {
+          output = output.data;
+        }
+
+        // Ensure output is an array
+        if (!Array.isArray(output)) {
+          output = [output];
+        }
+
+        setTextOutput(output.map(item => item.message || item).join('\n'));
+        setShowSkeleton(false);
+        setDataLoaded(true);
+        showWebhookMessage('success', data.message || 'Output data retrieved successfully!');
       } else {
-        console.error('❌ Input Message Error Response:', inputResponse);
-        if (inputResponse.error === "Login or register first") {
+        console.error('❌ Input Message Error Response:', data);
+        if (data.error === "Login or register first") {
           showWebhookMessage('error', 'Please login or register first.');
         } else {
-          throw new Error(inputResponse.error || 'Input request failed');
+          throw new Error(data.error || 'Input request failed');
         }
       }
     } catch (error) {
       console.error('❌ Send Input Error:', error);
       showWebhookMessage('error', 'Failed to send input. Please try again.');
       setShowSkeleton(false);
+      setDataLoaded(true);
+      setTextOutput('Error loading output data.');
     } finally {
       setIsSending(false);
     }
-  };
-
-  const pollForOutputData = async () => {
-    let attempts = 0;
-    const maxAttempts = 15;
-    let isPollingActive = true;
-
-    const checkOutputData = async () => {
-      if (!isPollingActive) return;
-
-      try {
-        const textRes = await fetch(`${API_BASE}/memory/text-output`, { credentials: 'include' });
-
-        if (!textRes.ok) {
-          console.error('API Error - Status:', { text: textRes.status });
-          throw new Error('API request failed');
-        }
-
-        const textContentType = textRes.headers.get('content-type');
-        if (!textContentType?.includes('application/json')) {
-          console.error('Invalid content type:', { text: textContentType });
-          throw new Error('API returned non-JSON response');
-        }
-
-        const textData = await textRes.json();
-        console.log('📥 Polling Response:', { textData });
-
-        const hasTextOutput = textData.output?.length > 0;
-
-        if (hasTextOutput) {
-          setTextOutput(textData.output.map(item => item.message).join('\n'));
-          setShowSkeleton(false);
-          setDataLoaded(true);
-          setIsPolling(false);
-          isPollingActive = false;
-          showWebhookMessage('success', 'Output data retrieved successfully!');
-          return true;
-        } else {
-          attempts++;
-          console.log(`⏳ Attempt ${attempts}/${maxAttempts}: Waiting for output data...`);
-          if (attempts < maxAttempts && isPollingActive) {
-            setTimeout(checkOutputData, 20000);
-          } else if (isPollingActive) {
-            setShowSkeleton(false);
-            setTextOutput('No output data available after timeout.');
-            setDataLoaded(true);
-            setIsPolling(false);
-            isPollingActive = false;
-            showWebhookMessage('error', 'Timeout: No output data received after 5 minutes.');
-          }
-        }
-      } catch (err) {
-        console.error('❌ Error polling for output data:', err);
-        attempts++;
-        console.log(`❌ Error on attempt ${attempts}/${maxAttempts}:`, err.message);
-        if (attempts < maxAttempts && isPollingActive) {
-          setTimeout(checkOutputData, 20000);
-        } else if (isPollingActive) {
-          setShowSkeleton(false);
-          setTextOutput('Error loading output data.');
-          setDataLoaded(true);
-          setIsPolling(false);
-          isPollingActive = false;
-          showWebhookMessage('error', 'Failed to load output data after multiple attempts.');
-        }
-      }
-    };
-
-    setIsPolling(true);
-    checkOutputData();
   };
 
   // Improved Markdown detection to handle the specific response structure
@@ -354,29 +294,22 @@ const Agent4 = () => {
                 className={`w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none min-h-[48px] ${
                   inputEnabled ? 'bg-gray-50 text-gray-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'
                 }`}
-                placeholder={inputEnabled ? "Enter your query or question about the uploaded document..." : "Upload a PDF first, then wait 5 seconds to enable input..."}
+                placeholder={inputEnabled ? "Enter your query or question about the uploaded document..." : "Upload a PDF first to enable input..."}
                 style={{ height: 'auto', minHeight: '48px', overflow: 'hidden' }}
               />
-              {!inputEnabled && pdfUploaded && (
-                <div className="mt-2 text-sm text-blue-600">
-                  ⏱️ Processing PDF... Input field will be enabled in 15 seconds...
-                </div>
-              )}
             </div>
             
             <div className="text-center mb-6">
               <button 
                 onClick={sendToMemorySystem}
-                disabled={isUploading || isSending || isPolling || !inputValue.trim() || !inputEnabled}
+                disabled={isUploading || isSending || !inputValue.trim() || !inputEnabled}
                 className="inline-flex items-center justify-center gap-2 font-medium transition-colors bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white text-lg px-12 py-6 rounded-2xl shadow"
               >
-                {isSending ? 'Sending...' : isPolling ? 'Waiting for Output...' : !inputEnabled ? 'Input Disabled' : 'Send Input Message'}
+                {isSending ? 'Sending...' : !inputEnabled ? 'Input Disabled' : 'Send Input Message'}
               </button>
             </div>
             
-            
-          </div>
-          {(dataLoaded || showSkeleton) && (
+            {(dataLoaded || showSkeleton) && (
               <div className="mb-6">
                 <label className="block mb-2 font-medium text-gray-700 text-lg">Response</label>
                 {showSkeleton ? (
@@ -395,14 +328,14 @@ const Agent4 = () => {
                       isMarkdown(textOutput) ? (
                         <ReactMarkdown
                           components={{
-                            h1: ({  ...props }) => <h1 className="text-3xl font-bold mt-6 mb-4 text-gray-900" {...props} />,
-                            h2: ({  ...props }) => <h2 className="text-2xl font-semibold mt-5 mb-3 text-gray-800" {...props} />,
-                            h3: ({  ...props }) => <h3 className="text-xl font-medium mt-4 mb-2 text-gray-700" {...props} />,
-                            p: ({  ...props }) => <p className="text-gray-700 mb-4 leading-relaxed" {...props} />,
-                            ul: ({  ...props }) => <ul className="list-disc list-inside mb-4 text-gray-700 pl-4" {...props} />,
+                            h1: ({ ...props }) => <h1 className="text-3xl font-bold mt-6 mb-4 text-gray-900" {...props} />,
+                            h2: ({ ...props }) => <h2 className="text-2xl font-semibold mt-5 mb-3 text-gray-800" {...props} />,
+                            h3: ({ ...props }) => <h3 className="text-xl font-medium mt-4 mb-2 text-gray-700" {...props} />,
+                            p: ({ ...props }) => <p className="text-gray-700 mb-4 leading-relaxed" {...props} />,
+                            ul: ({ ...props }) => <ul className="list-disc list-inside mb-4 text-gray-700 pl-4" {...props} />,
                             ol: ({ ...props }) => <ol className="list-decimal list-inside mb-4 text-gray-700 pl-4" {...props} />,
                             li: ({ ...props }) => <li className="mb-2 pl-2" {...props} />,
-                            strong: ({  ...props }) => <strong className="font-semibold text-gray-900" {...props} />,
+                            strong: ({ ...props }) => <strong className="font-semibold text-gray-900" {...props} />,
                           }}
                         >
                           {textOutput}
@@ -421,6 +354,7 @@ const Agent4 = () => {
                 )}
               </div>
             )}
+          </div>
         </div>
       </div>
     </div>

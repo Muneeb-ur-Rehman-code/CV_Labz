@@ -25,16 +25,11 @@ const Agent2 = () => {
     "Job Search strategies"
   ];
 
-  const pollingRef = useRef(false);
-  const timeoutRef = useRef(null);
   const dropdownRef = useRef(null);
 
   const showMessage = (type, text, duration = 3000) => {
     setMessage({ show: true, type, text });
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-    timeoutRef.current = setTimeout(() => {
+    setTimeout(() => {
       setMessage({ show: false, type: "", text: "" });
     }, duration);
   };
@@ -72,95 +67,6 @@ const Agent2 = () => {
     return doc.body.innerHTML;
   };
 
-  const pollForData = async () => {
-    let attempts = 0;
-    const maxAttempts = 15;
-    pollingRef.current = true;
-
-    const checkData = async () => {
-      if (!pollingRef.current) return;
-
-      try {
-        const response = await fetch(`${API_BASE_URL}/blogs/blog-output`, {
-          method: "GET",
-          credentials: "include",
-        });
-
-        const contentType = response.headers.get("content-type");
-        let data;
-        if (contentType && contentType.includes("application/json")) {
-          data = await response.json();
-        } else {
-          data = await response.text();
-        }
-
-        if (!response.ok) {
-          throw new Error(data.message || `HTTP error! status: ${response.status}`);
-        }
-
-        if (data?.message === "No output available") {
-          attempts++;
-          if (attempts < maxAttempts && pollingRef.current) {
-            timeoutRef.current = setTimeout(checkData, 10000);
-          } else {
-            if (pollingRef.current) {
-              setShowSkeleton(false);
-              setIsLoading(false);
-              pollingRef.current = false;
-              showMessage("error", "Timeout: No data received.");
-              setOutputText("No data available.");
-            }
-          }
-          return;
-        }
-        
-        if (data?.output && pollingRef.current) {
-          let outputBlog = data.output.output || data.output;
-          if (outputBlog.title && outputBlog.html) {
-            setFinalBlog({
-              title: outputBlog.title,
-              html: addTailwindClassesToHeadings(outputBlog.html),
-              images: [outputBlog["Image 1"], outputBlog["Image 2"]].filter(Boolean),
-              type: blogType
-            });
-          } else {
-            const cleanedOutput = outputBlog.replace(/\\n/g, "\n");
-            setOutputText(cleanedOutput);
-          }
-          
-          setShowSkeleton(false);
-          setIsLoading(false);
-          pollingRef.current = false;
-        }
-      } catch (error) {
-        console.error("Polling error:", error);
-        if (pollingRef.current) {
-          attempts++;
-          if (attempts < maxAttempts) {
-            timeoutRef.current = setTimeout(checkData, 10000);
-          } else {
-            setShowSkeleton(false);
-            setIsLoading(false);
-            pollingRef.current = false;
-            showMessage("error", "Failed to retrieve data.");
-            setOutputText("Error retrieving data.");
-          }
-        }
-      }
-    };
-
-    await checkData();
-  };
-
-  useEffect(() => {
-    return () => {
-      pollingRef.current = false;
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
   const sendInput = async () => {
     if (!inputText.trim()) {
       showMessage("error", "Please enter some input");
@@ -169,11 +75,6 @@ const Agent2 = () => {
     if (!blogType) {
       showMessage("error", "Please select a blog type");
       return;
-    }
-    
-    pollingRef.current = false;
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
     }
     
     setIsLoading(true);
@@ -188,7 +89,7 @@ const Agent2 = () => {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ message: inputText }),
+        body: JSON.stringify({ message: inputText, userId: "1245" }),
       });
 
       const contentType = response.headers.get("content-type");
@@ -196,19 +97,37 @@ const Agent2 = () => {
       if (contentType && contentType.includes("application/json")) {
         data = await response.json();
       } else {
-        data = await response.text();
+        throw new Error("Invalid response format from server");
       }
 
       if (!response.ok) {
-        throw new Error(data.message || `HTTP error! status: ${response.status}`);
+        throw new Error(data.error || `HTTP error! status: ${response.status}`);
       }
 
-      await pollForData();
-    } catch (error) {
-      console.error("Error sending input", error);
+      const { message: responseMessage, output } = data;
+
+      if (output?.title && output?.html) {
+        setFinalBlog({
+          title: output.title,
+          html: addTailwindClassesToHeadings(output.html),
+          images: [output.Image1, output.Image2].filter(Boolean),
+          type: blogType
+        });
+        showMessage("success", responseMessage || "Blog generated successfully!");
+      } else {
+        const cleanedOutput = output?.replace(/\\n/g, "\n") || "No valid blog content received.";
+        setOutputText(cleanedOutput);
+        showMessage("error", "Invalid blog format received from server.");
+      }
+
       setShowSkeleton(false);
       setIsLoading(false);
-      showMessage("error", "Failed to send input");
+    } catch (error) {
+      console.error("Error sending input:", error);
+      setShowSkeleton(false);
+      setIsLoading(false);
+      setOutputText("Error retrieving blog content.");
+      showMessage("error", error.message || "Failed to generate blog.");
     }
   };
 
@@ -311,9 +230,19 @@ const Agent2 = () => {
       let updatedHtml = finalBlog.html;
       let updatedImages = [...finalBlog.images];
 
-      if (imageFiles.length > 0) {
+      // Identify which images need uploading (base64) and which are already URLs
+      const imagesToUpload = [];
+      const uploadIndices = [];
+      updatedImages.forEach((url, index) => {
+        if (url.startsWith("data:image/")) {
+          imagesToUpload.push(imageFiles[uploadIndices.length]);
+          uploadIndices.push(index);
+        }
+      });
+
+      if (imagesToUpload.length > 0) {
         const formData = new FormData();
-        imageFiles.forEach((file, index) => {
+        imagesToUpload.forEach((file, index) => {
           console.log(`[saveBlog] Adding file ${index + 1}:`, file.name);
           formData.append("images", file);
         });
@@ -329,7 +258,7 @@ const Agent2 = () => {
         if (contentType && contentType.includes("application/json")) {
           uploadData = await uploadResponse.json();
         } else {
-          uploadData = await uploadResponse.text();
+          throw new Error("Invalid response format from image upload");
         }
 
         if (!uploadResponse.ok) {
@@ -338,36 +267,40 @@ const Agent2 = () => {
 
         console.log("[saveBlog] Upload response:", uploadData);
 
-        if (!uploadData.urls || uploadData.urls.length < imageFiles.length) {
-          throw new Error(`Expected ${imageFiles.length} URLs, received ${uploadData.urls?.length || 0}`);
+        if (!uploadData.urls || uploadData.urls.length < imagesToUpload.length) {
+          throw new Error(`Expected ${imagesToUpload.length} URLs, received ${uploadData.urls?.length || 0}`);
         }
 
         const { urls } = uploadData;
 
+        // Update HTML and images array with Cloudinary URLs
         const parser = new DOMParser();
         const doc = parser.parseFromString(updatedHtml, "text/html");
         const imgs = doc.querySelectorAll("img");
-        imgs.forEach((img, index) => {
-          if (urls[index]) {
-            console.log(`[saveBlog] Replacing img ${index + 1} src with:`, urls[index]);
-            img.src = urls[index];
-            updatedImages[index] = urls[index];
+
+        uploadIndices.forEach((imgIndex, uploadIndex) => {
+          const targetImg = Array.from(imgs).find((img) => img.src === updatedImages[imgIndex]);
+          if (targetImg && urls[uploadIndex]) {
+            console.log(`[saveBlog] Replacing img ${imgIndex + 1} src with:`, urls[uploadIndex]);
+            targetImg.src = urls[uploadIndex];
+            updatedImages[imgIndex] = urls[uploadIndex];
           } else {
-            console.warn(`[saveBlog] No URL for img ${index + 1}, leaving unchanged`);
+            console.warn(`[saveBlog] No matching img or URL for index ${imgIndex + 1}`);
           }
         });
 
+        // Remove placeholders
         const placeholders = doc.querySelectorAll(".image-placeholder");
         placeholders.forEach((ph) => ph.remove());
 
         updatedHtml = doc.body.innerHTML;
       } else {
+        // No user-uploaded images; clean up placeholders
         const parser = new DOMParser();
         const doc = parser.parseFromString(updatedHtml, "text/html");
         const placeholders = doc.querySelectorAll(".image-placeholder");
         placeholders.forEach((ph) => ph.remove());
         updatedHtml = doc.body.innerHTML;
-        updatedImages = []; // No images to save
       }
 
       console.log("[saveBlog] Saving blog with:", { html: updatedHtml, type: finalBlog.type, title: finalBlog.title, images: updatedImages });
@@ -390,9 +323,8 @@ const Agent2 = () => {
       if (saveContentType && saveContentType.includes("application/json")) {
         saveData = await saveResponse.json();
       } else {
-        saveData = await saveResponse.text();
-      }
-
+        throw new Error("Invalid response format from save blog");
+        }
       if (!saveResponse.ok) {
         throw new Error(saveData.message || `HTTP error! status: ${saveResponse.status}`);
       }
@@ -407,11 +339,6 @@ const Agent2 = () => {
   };
 
   const generateNewBlog = () => {
-    pollingRef.current = false;
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-    
     setFinalBlog(null);
     setOutputText("");
     setInputText("");

@@ -1,11 +1,12 @@
+
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const KeywordManager = () => {
   const [keywordAnalysis, setKeywordAnalysis] = useState(null);
+  const [noKeywordData, setNoKeywordData] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [webhookMessage, setWebhookMessage] = useState({ show: false, type: '', text: '' });
-  const [isPolling, setIsPolling] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const API_BASE = "https://delightful-passion-production.up.railway.app/keywords";
 
@@ -20,64 +21,11 @@ const KeywordManager = () => {
     const file = e.target.files[0];
     if (file && file.type === 'text/csv') {
       setSelectedFile(file);
+      setNoKeywordData(false);
     } else {
       showWebhookMessage('error', 'Please select a valid CSV file.');
       setSelectedFile(null);
     }
-  };
-
-  const pollForKeywordData = async () => {
-    let attempts = 0;
-    const maxAttempts = 15;
-    let isPollingActive = true;
-
-    const checkKeywordData = async () => {
-      if (!isPollingActive) return;
-      try {
-        const response = await fetch(`${API_BASE}/keywords-data`, {
-          headers: { 'Content-Type': 'application/json' }
-        });
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const contentType = response.headers.get('content-type');
-        if (!contentType?.includes('application/json')) {
-          throw new Error('API returned non-JSON response');
-        }
-        const data = await response.json();
-        console.log('Keyword data response:', data);
-        if (data.data && Array.isArray(data.data)) {
-          setKeywordAnalysis(data.data);
-          setIsPolling(false);
-          isPollingActive = false;
-          showWebhookMessage('success', 'Keyword analysis retrieved successfully!');
-          return true;
-        } else if (data.data && data.data.message === 'No valid data provided') {
-          attempts++;
-          console.log(`Attempt ${attempts}: Waiting for keyword data...`);
-          if (attempts < maxAttempts && isPollingActive) {
-            setTimeout(checkKeywordData, 20000);
-          } else if (isPollingActive) {
-            setIsPolling(false);
-            isPollingActive = false;
-            showWebhookMessage('error', 'Timeout: No data received after 5 minutes.');
-          }
-        } else {
-          throw new Error('Unexpected response format');
-        }
-      } catch (error) {
-        console.error('Error polling for keyword data:', error);
-        attempts++;
-        if (attempts < maxAttempts && isPollingActive) {
-          setTimeout(checkKeywordData, 20000);
-        } else if (isPollingActive) {
-          setIsPolling(false);
-          isPollingActive = false;
-          showWebhookMessage('error', 'Failed to retrieve keyword data.');
-        }
-      }
-    };
-    checkKeywordData();
   };
 
   const generateKeywordAnalysis = async () => {
@@ -87,6 +35,9 @@ const KeywordManager = () => {
     }
     setIsLoading(true);
     setKeywordAnalysis(null);
+    setNoKeywordData(false);
+    showWebhookMessage('info', 'Generating keyword analysis...');
+
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
@@ -94,23 +45,36 @@ const KeywordManager = () => {
         method: 'POST',
         body: formData,
       });
-      if (response.ok) {
-        showWebhookMessage('success', 'CSV uploaded successfully! Generating keyword analysis...');
-        setIsLoading(false);
-        setIsPolling(true);
-        pollForKeywordData();
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const { message: responseMessage, data } = await response.json();
+      console.debug("Backend response:", data);
+
+      if (data === null || !Array.isArray(data) || data.length === 0) {
+        setNoKeywordData(true);
+        showWebhookMessage('info', responseMessage || 'No keyword data available for the uploaded file.');
+      } else if (Array.isArray(data) && data.every(item => item.keyword && item.status && item.explanation)) {
+        setKeywordAnalysis(data);
+        showWebhookMessage('success', responseMessage || 'Keyword analysis retrieved successfully!');
       } else {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error('Invalid keyword data format');
       }
     } catch (error) {
       console.error('Error generating keyword analysis:', error);
+      showWebhookMessage('error', error.message.includes('No CSV file provided') 
+        ? 'Please upload a valid CSV file.' 
+        : 'Failed to retrieve keyword analysis.');
+    } finally {
       setIsLoading(false);
-      showWebhookMessage('error', 'Failed to process CSV file. Please try again.');
     }
   };
 
   const renderKeywordAnalysis = (keywords) => {
-    if (!keywords || !Array.isArray(keywords)) return null;
+    if (!keywords || !Array.isArray(keywords) || keywords.length === 0) return null;
 
     return (
       <div className="space-y-6">
@@ -156,7 +120,9 @@ const KeywordManager = () => {
               className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
                 webhookMessage.type === 'success'
                   ? 'bg-green-100 text-green-800 border border-green-200'
-                  : 'bg-red-100 text-red-800 border border-red-200'
+                  : webhookMessage.type === 'error'
+                  ? 'bg-red-100 text-red-800 border border-red-200'
+                  : 'bg-blue-100 text-blue-800 border border-blue-200'
               }`}
             >
               {webhookMessage.text}
@@ -210,7 +176,7 @@ const KeywordManager = () => {
               />
               <button
                 onClick={generateKeywordAnalysis}
-                disabled={isLoading || isPolling}
+                disabled={isLoading}
                 className="w-full font-medium transition-colors bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white text-base px-6 py-3 rounded-xl shadow-lg"
               >
                 {isLoading ? (
@@ -221,8 +187,6 @@ const KeywordManager = () => {
                     </svg>
                     Processing CSV...
                   </span>
-                ) : isPolling ? (
-                  'Generating Insights...'
                 ) : (
                   'Analyze Keyword Data'
                 )}
@@ -244,6 +208,23 @@ const KeywordManager = () => {
               <div className="bg-blue-50 p-6 rounded-2xl">
                 {renderKeywordAnalysis(keywordAnalysis)}
               </div>
+            </motion.div>
+          )}
+          {noKeywordData && !isLoading && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.5 }}
+              className="glass-card rounded-3xl overflow-hidden shadow-soft-lg p-8 max-w-4xl mx-auto text-center"
+            >
+              <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <h3 className="mt-4 text-lg font-medium text-gray-900">No Keyword Data Available</h3>
+              <p className="mt-2 text-gray-500">
+                Upload a valid CSV file to receive keyword analysis!
+              </p>
             </motion.div>
           )}
         </AnimatePresence>
