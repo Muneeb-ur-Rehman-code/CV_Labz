@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const TemplateEmail = () => {
   const navigate = useNavigate();
@@ -11,6 +12,7 @@ const TemplateEmail = () => {
   const [activeTab, setActiveTab] = useState('single');
   // Dashboard and details state
   const [campaigns, setCampaigns] = useState([]);
+  const [noCampaignData, setNoCampaignData] = useState(false);
   const [isDashboardLoading, setIsDashboardLoading] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
@@ -18,8 +20,6 @@ const TemplateEmail = () => {
   const [showSuccessScreen, setShowSuccessScreen] = useState(false);
   const [webhookMessage, setWebhookMessage] = useState({ show: false, type: '', text: '' });
   const [isLoading, setIsLoading] = useState(false);
-  // Ref for polling control
-  const pollingRef = useRef({ dashboard: false });
   const API_BASE = "https://delightful-passion-production.up.railway.app/emails";
 
   // Handle input changes
@@ -60,6 +60,7 @@ const TemplateEmail = () => {
     setShowDashboard(false);
     setSelectedCampaign(null);
     setShowSuccessScreen(false);
+    setNoCampaignData(false);
     navigate('/email-marketing-campaigns');
     console.log('[Reset Interface] Navigated to email type selection');
   };
@@ -75,110 +76,11 @@ const TemplateEmail = () => {
     }
   };
 
-  // Convert HTML to plain text for copying
-  const htmlToPlainText = (html) => {
-    if (!html) return '';
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = html;
-    return tempDiv.textContent || tempDiv.innerText || '';
-  };
-
   // Copy text to clipboard
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
       .then(() => showWebhookMessage('success', 'Content copied to clipboard!'))
       .catch(() => showWebhookMessage('error', 'Failed to copy content.'));
-  };
-
-  // Poll for dashboard data
-  const pollForDashboardData = async () => {
-    const maxAttempts = 15;
-    let attempts = 0;
-    const checkDashboardData = async () => {
-      if (!pollingRef.current.dashboard) {
-        console.log('[Dashboard Polling] Stopped due to cancellation');
-        return;
-      }
-      try {
-        console.debug('[Dashboard Polling] Fetching from /dashboard-data');
-        const response = await fetch(`${API_BASE}/dashboard-data`, { credentials: 'include' });
-        if (!response.ok) throw new Error(`API error - Status: ${response.status}`);
-        const data = await response.json();
-        console.debug('[Dashboard Polling] Response:', data);
-        if (data?.message === 'No data available') {
-          attempts++;
-          if (attempts < maxAttempts && pollingRef.current.dashboard) {
-            setTimeout(checkDashboardData, 10000);
-          } else {
-            setCampaigns([]);
-            setShowDashboard(true);
-            setIsDashboardLoading(false);
-            pollingRef.current.dashboard = false;
-            showWebhookMessage('error', 'Timeout: No dashboard data received.');
-          }
-          return;
-        }
-        // Process single_templates and bulk_templates
-        const validCampaigns = [];
-        data.forEach(item => {
-          if (item.single_templates) {
-            item.single_templates.forEach(template => {
-              validCampaigns.push({
-                type: 'single_template',
-                campaignkey: template.campaignkey,
-                campaign: template.campaign || 'Template Campaign', // Fallback if campaign name is missing
-                clicks: template.clicks || 0,
-                userId: template.userId,
-              });
-            });
-          }
-          if (item.bulk_templates) {
-            item.bulk_templates.forEach(template => {
-              validCampaigns.push({
-                type: 'bulk_template',
-                campaignkey: template.campaignkey,
-                campaign: template.campaign || 'Bulk Template Campaign', // Fallback if campaign name is missing
-                clicks: template.clicks || 0,
-                userId: template.userId,
-              });
-            });
-          }
-        });
-        if (validCampaigns.length > 0) {
-          setCampaigns(validCampaigns);
-          setShowDashboard(true);
-          setIsDashboardLoading(false);
-          pollingRef.current.dashboard = false;
-          showWebhookMessage('success', 'Dashboard data retrieved successfully!');
-        } else {
-          attempts++;
-          if (attempts < maxAttempts && pollingRef.current.dashboard) {
-            setTimeout(checkDashboardData, 10000);
-          } else {
-            setCampaigns([]);
-            setShowDashboard(true);
-            setIsDashboardLoading(false);
-            pollingRef.current.dashboard = false;
-            showWebhookMessage('error', 'Timeout: No valid dashboard data received.');
-          }
-        }
-      } catch (error) {
-        console.error('[Dashboard Polling] Error:', error.message);
-        attempts++;
-        if (attempts < maxAttempts && pollingRef.current.dashboard) {
-          setTimeout(checkDashboardData, 10000);
-        } else {
-          setCampaigns([]);
-          setShowDashboard(true);
-          setIsDashboardLoading(false);
-          pollingRef.current.dashboard = false;
-          showWebhookMessage('error', 'Failed to load dashboard data.');
-        }
-      }
-    };
-    setIsDashboardLoading(true);
-    pollingRef.current.dashboard = true;
-    checkDashboardData();
   };
 
   // Send template email request
@@ -215,14 +117,16 @@ const TemplateEmail = () => {
       }
       const data = await response.json();
       if (response.ok) {
-        showWebhookMessage('success', data.message || 'Template email(s) sent successfully!');
+        showWebhookMessage('success', data.message || (activeTab === 'single' ? 'Template email sent successfully!' : 'Template emails sent successfully!'));
         setShowSuccessScreen(true);
       } else {
         throw new Error(data.error || 'Request failed');
       }
     } catch (error) {
       console.error('[Send Template Email] Error:', error.message);
-      showWebhookMessage('error', 'Failed to send template email(s). Please try again.');
+      showWebhookMessage('error', error.message === 'Login or Register first' 
+        ? 'Please login or register first.' 
+        : 'Failed to send template email(s).');
     } finally {
       setIsLoading(false);
     }
@@ -233,20 +137,60 @@ const TemplateEmail = () => {
     setIsDashboardLoading(true);
     setShowDashboard(true);
     setShowSuccessScreen(false);
+    setNoCampaignData(false);
     try {
       const response = await fetch(`${API_BASE}/dashboard-data-req`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
       });
-      if (!response.ok) throw new Error(`Fetch campaigns failed: ${response.status}`);
-      pollForDashboardData();
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || errorData.error || `Fetch campaigns failed: ${response.status}`);
+      }
+      const { message, data } = await response.json();
+      if (!data) {
+        setCampaigns([]);
+        setNoCampaignData(true);
+        showWebhookMessage('info', message || 'No campaign data available.');
+      } else {
+        const validCampaigns = [];
+        data.forEach(item => {
+          if (item.single_templates) {
+            item.single_templates.forEach(template => {
+              validCampaigns.push({
+                type: 'single_template',
+                campaignkey: template.campaignkey,
+                campaign: template.campaign || 'Template Campaign',
+                clicks: template.clicks || 0,
+                userId: template.userId,
+              });
+            });
+          }
+          if (item.bulk_templates) {
+            item.bulk_templates.forEach(template => {
+              validCampaigns.push({
+                type: 'bulk_template',
+                campaignkey: template.campaignkey,
+                campaign: template.campaign || 'Bulk Template Campaign',
+                clicks: template.clicks || 0,
+                userId: template.userId,
+              });
+            });
+          }
+        });
+        setCampaigns(validCampaigns);
+        showWebhookMessage('success', message || 'Campaign data retrieved successfully!');
+      }
     } catch (error) {
       console.error('[Fetch Campaigns] Error:', error.message);
-      showWebhookMessage('error', 'Failed to fetch campaigns. Please try again.');
+      showWebhookMessage('error', error.message === 'Login or Register first' 
+        ? 'Please login or register first.' 
+        : 'Failed to fetch campaigns.');
       setCampaigns([]);
+      setNoCampaignData(true);
+    } finally {
       setIsDashboardLoading(false);
-      setShowDashboard(true);
     }
   };
 
@@ -270,7 +214,6 @@ const TemplateEmail = () => {
     });
     return Object.values(grouped).filter(group => group.versions.length > 0).map((group) => ({
       ...group,
-      // No winner for template campaigns as there's no A/B testing
       winner: null,
     }));
   };
@@ -280,40 +223,32 @@ const TemplateEmail = () => {
     return type === 'single_template' ? 'Single Template' : 'Bulk Template';
   };
 
-  // Cleanup polling
-  useEffect(() => {
-    return () => {
-      pollingRef.current.dashboard = false;
-      console.log('[Cleanup] Stopped dashboard polling');
-    };
-  }, []);
-
   return (
-    <div className="min-h-screen bg-gray-100 px-4 sm:px-6 lg:px-8 py-8">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 px-4 sm:px-6 lg:px-8 py-8">
       <div className="max-w-7xl mx-auto">
         {/* Webhook Message */}
-        {webhookMessage.show && (
-          <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-xl shadow-lg transition-all duration-300 ${
-            webhookMessage.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-          }`}>
-            <div className="flex items-center gap-2">
-              {webhookMessage.type === 'success' ? (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              )}
-              <span className="font-medium">{webhookMessage.text}</span>
-            </div>
-          </div>
-        )}
+        <AnimatePresence>
+          {webhookMessage.show && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
+                webhookMessage.type === 'success'
+                  ? 'bg-green-100 text-green-800 border border-green-200'
+                  : webhookMessage.type === 'error'
+                  ? 'bg-red-100 text-red-800 border border-red-200'
+                  : 'bg-blue-100 text-blue-800 border border-blue-200'
+              }`}
+            >
+              {webhookMessage.text}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Header */}
         <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-3 bg-white text-purple-700 shadow px-3 py-2 rounded-full text-xs font-semibold mb-4">
+          <div className="inline-flex items-center gap-3 glass-card text-purple-700 shadow px-3 py-2 rounded-full text-xs font-semibold mb-4">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <rect width="20" height="16" x="2" y="4" rx="2" />
               <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
@@ -332,7 +267,7 @@ const TemplateEmail = () => {
 
         {/* Success Screen */}
         {showSuccessScreen && (
-          <div className="bg-white rounded-3xl shadow-lg p-8 mb-8">
+          <div className="glass-card rounded-3xl shadow-soft-lg p-8 mb-8">
             <div className="text-center">
               <svg className="w-16 h-16 mx-auto mb-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -344,18 +279,22 @@ const TemplateEmail = () => {
                 {activeTab === 'single' ? 'Your template email has been sent.' : 'Your template emails have been sent to the recipients in the CSV.'}
               </p>
               <div className="space-x-4">
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={resetInterface}
                   className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-colors"
                 >
                   Start New Campaign
-                </button>
-                <button
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={fetchCampaigns}
                   className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors"
                 >
                   View Existing Campaigns
-                </button>
+                </motion.button>
               </div>
             </div>
           </div>
@@ -363,41 +302,57 @@ const TemplateEmail = () => {
 
         {/* Campaign Dashboard */}
         {showDashboard && !selectedCampaign && !showSuccessScreen && (
-          <div className="bg-white rounded-3xl shadow-lg p-8 mb-8">
+          <div className="glass-card rounded-3xl shadow-soft-lg p-8 mb-8">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-semibold text-gray-800">Template Campaigns Dashboard</h2>
               <div className="space-x-4">
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={resetInterface}
                   className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
                 >
                   Start New Campaign
-                </button>
-                <button
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={fetchCampaigns}
                   className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
                 >
                   Refresh Campaigns
-                </button>
+                </motion.button>
               </div>
             </div>
             {isDashboardLoading ? (
               <div className="text-center text-gray-500">Loading campaigns...</div>
+            ) : noCampaignData ? (
+              <div className="text-center">
+                <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <h3 className="mt-4 text-lg font-medium text-gray-900">No Campaigns Available</h3>
+                <p className="mt-2 text-gray-500">
+                  Try generating a new campaign to see data here!
+                </p>
+              </div>
             ) : campaigns.length === 0 ? (
               <div className="text-center text-gray-500">No campaigns found.</div>
             ) : (
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {groupCampaigns(campaigns).map((group, index) => (
-                  <div key={index} className="bg-white shadow-md rounded-xl p-6 border border-gray-200">
+                  <div key={index} className="glass-card rounded-xl shadow-soft p-6 border border-gray-200">
                     <h3 className="text-lg font-semibold text-gray-800 mb-2">{group.campaignName || 'Unnamed Campaign'}</h3>
                     <p className="text-gray-600 mb-1">Type: {getCampaignType(group.versions[0]?.type)}</p>
                     <p className="text-gray-600 mb-4">Clicks: {group.versions[0]?.clicks || 0}</p>
-                    <button
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
                       onClick={() => setSelectedCampaign(group)}
                       className="w-full bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
                     >
                       Show Details
-                    </button>
+                    </motion.button>
                   </div>
                 ))}
               </div>
@@ -407,22 +362,26 @@ const TemplateEmail = () => {
 
         {/* Campaign Details View */}
         {showDashboard && selectedCampaign && !showSuccessScreen && (
-          <div className="bg-white rounded-3xl shadow-lg p-8 mb-8">
+          <div className="glass-card rounded-3xl shadow-soft-lg p-8 mb-8">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-semibold text-gray-800">{selectedCampaign.campaignName || 'Unnamed Campaign'}</h2>
               <div className="space-x-4">
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={() => setSelectedCampaign(null)}
                   className="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors"
                 >
                   Back to Dashboard
-                </button>
-                <button
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={resetInterface}
                   className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
                 >
                   Start New Campaign
-                </button>
+                </motion.button>
               </div>
             </div>
             <div className="text-center mb-6">
@@ -432,17 +391,19 @@ const TemplateEmail = () => {
             </div>
             {selectedCampaign.versions.length > 0 ? (
               <div className="max-w-2xl mx-auto">
-                <div className="border border-gray-200 rounded-xl shadow-sm p-6 bg-gradient-to-br from-purple-50 to-white">
+                <div className="glass-card rounded-xl shadow-soft p-6 bg-gradient-to-br from-purple-50 to-white">
                   <h3 className="text-lg font-semibold text-purple-800 mb-2">{getCampaignType(selectedCampaign.versions[0].type)}</h3>
                   <p className="text-gray-600 mb-4">Clicks: {selectedCampaign.versions[0]?.clicks || 0}</p>
                   <p className="text-gray-600 mb-4">User ID: {selectedCampaign.versions[0]?.userId || 'N/A'}</p>
-                  <button
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
                     onClick={() => copyToClipboard(selectedCampaign.versions[0]?.userId || '')}
-                    className="w-full bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors focus:ring-2 focus:ring-purple-500 focus:ring-offset-2"
+                    className="w-full bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors disabled:bg-gray-400"
                     disabled={!selectedCampaign.versions[0]?.userId}
                   >
                     Copy User ID
-                  </button>
+                  </motion.button>
                 </div>
               </div>
             ) : (
@@ -453,42 +414,50 @@ const TemplateEmail = () => {
 
         {/* Campaign Input Form */}
         {!showDashboard && !showSuccessScreen && (
-          <div className="bg-white rounded-3xl shadow-lg p-8 mb-8">
+          <div className="glass-card rounded-3xl shadow-soft-lg p-8 mb-8">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-semibold text-gray-800">Start Your Template Email Campaign</h2>
               <div className="space-x-4">
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={resetInterface}
                   className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
                 >
                   Start New Campaign
-                </button>
-                <button
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={fetchCampaigns}
                   className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
                 >
                   View Existing Campaigns
-                </button>
+                </motion.button>
               </div>
             </div>
             <div className="flex justify-center mb-6">
               <div className="inline-flex bg-white rounded-full p-1 shadow-sm">
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={() => handleTabChange('single')}
                   className={`px-6 py-2 rounded-full text-sm font-medium transition-colors ${
                     activeTab === 'single' ? 'bg-purple-600 text-white' : 'text-gray-600 hover:bg-gray-100'
                   }`}
                 >
                   Single Email
-                </button>
-                <button
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={() => handleTabChange('bulk')}
                   className={`px-6 py-2 rounded-full text-sm font-medium transition-colors ${
                     activeTab === 'bulk' ? 'bg-purple-600 text-white' : 'text-gray-600 hover:bg-gray-100'
                   }`}
                 >
                   Bulk Emails
-                </button>
+                </motion.button>
               </div>
             </div>
             <div className="max-w-md mx-auto">
@@ -526,13 +495,25 @@ const TemplateEmail = () => {
                 )}
               </div>
               <div className="text-center mt-6">
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={sendTemplateEmail}
                   disabled={isLoading}
                   className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-colors disabled:bg-gray-400"
                 >
-                  {isLoading ? 'Sending...' : activeTab === 'single' ? 'Send Template Email' : 'Send Template Emails'}
-                </button>
+                  {isLoading ? (
+                    <span className="flex items-center">
+                      <svg className="animate-spin h-5 w-5 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Sending...
+                    </span>
+                  ) : (
+                    activeTab === 'single' ? 'Send Template Email' : 'Send Template Emails'
+                  )}
+                </motion.button>
               </div>
             </div>
           </div>
